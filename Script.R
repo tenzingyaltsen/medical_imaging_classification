@@ -74,3 +74,125 @@ fnames <- paste0("BloodImage_", eos_val_indices, ".jpg")
 file.copy(file.path(original_dataset_dir, fnames),
           file.path(validation_eos_dir))
 
+# Define training generator and convert training images to tensors.
+train_datagen <- image_data_generator(rescale = 1/255)
+train_generator <- flow_images_from_directory(
+  train_dir,
+  train_datagen,
+  target_size = c(128,128),
+  batch_size = 20,
+  class_mode = "binary"
+)
+# Define validation generator and convert validation images to tensors.
+validation_datagen <- image_data_generator(rescale = 1/255)
+validation_generator <- flow_images_from_directory(
+  validation_dir,
+  validation_datagen,
+  target_size = c(128, 128),
+  batch_size = 37,
+  class_mode = "binary"
+)
+
+# Define CNN.
+model <- keras_model_sequential() %>%
+  layer_conv_2d(filters = 32, kernel_size = c(3, 3), activation = "relu",
+                input_shape = c(128, 128, 3)) %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_conv_2d(filters = 64, kernel_size = c(3, 3), activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_conv_2d(filters = 128, kernel_size = c(3, 3), activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_conv_2d(filters = 128, kernel_size = c(3, 3), activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_flatten() %>%
+  layer_dense(units = 512, activation = "relu") %>%
+  layer_dense(units = 1, activation = "sigmoid")
+
+# Compile CNN.
+model %>% compile(
+  loss = "binary_crossentropy",
+  optimizer = optimizer_rmsprop(learning_rate  = 1e-4),
+  # Low learning rate.
+  metrics = c("AUC")
+)
+
+# Training the CNN with fit_generator().
+history <- model %>% fit_generator(
+  train_generator,
+  steps_per_epoch = 11,
+  epochs = 30,
+  validation_data = validation_generator,
+  validation_steps = 2
+)
+# Plot training and validation loss and AUC.
+plot(history)
+
+# Time for augmentation. Add relevant transformations to a new training generator.
+train_datagen <- image_data_generator(
+  rescale = 1/255,
+  rotation_range = 40,
+  width_shift_range = 0.2,
+  height_shift_range = 0.2,
+  shear_range = 0.2,
+  zoom_range = 0.2,
+  horizontal_flip = TRUE,
+  fill_mode = "nearest"
+)
+# Note the validation generator will remain the same, with only rescaling performed.
+# Convert training images to tensors, with augmentation.
+train_generator <- flow_images_from_directory(
+  train_dir,
+  train_datagen,   
+  target_size = c(128, 128),
+  batch_size = 20,
+  class_mode = "binary" 
+)
+
+# Re-define model to include drop out.
+model <- keras_model_sequential() %>%
+  layer_conv_2d(filters = 32, kernel_size = c(3, 3), activation = "relu",
+                input_shape = c(128, 128, 3)) %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_conv_2d(filters = 64, kernel_size = c(3, 3), activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_conv_2d(filters = 128, kernel_size = c(3, 3), activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_conv_2d(filters = 128, kernel_size = c(3, 3), activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_flatten() %>%
+  layer_dropout(rate = 0.5) %>%
+  layer_dense(units = 512, activation = "relu") %>%
+  layer_dense(units = 1, activation = "sigmoid")
+
+# Compile CNN once again.
+model %>% compile(
+  loss = "binary_crossentropy",
+  optimizer = optimizer_rmsprop(learning_rate  = 1e-4),
+  # Low learning rate.
+  metrics = c("AUC")
+)
+
+# Training the CNN with fit_generator(), using augmented data and increased epochs.
+history <- model %>% fit_generator(
+  train_generator,
+  steps_per_epoch = 11,
+  epochs = 100,
+  validation_data = validation_generator,
+  validation_steps = 2
+)
+# Plot new training and validation loss and AUC.
+plot(history)
+
+# Plot ROC curve and extract validation AUC (non-batch wise, all at once).
+library(pROC)
+true_labels <- validation_generator$classes
+val_predictions <- model %>% predict(validation_generator)
+# Predictions vector must be numeric to apply roc() function.
+val_predictions <- as.numeric(val_predictions)
+# Create and plot ROC object.
+roc <- roc(true_labels, val_predictions)
+plot(roc, col = "blue", lwd = 1, main = "ROC Curve - CNN Model")
+# Extract and print validation AUC.
+auc_value <- auc(roc)
+print(auc_value)
+# Moderate discrimination, but not great.
